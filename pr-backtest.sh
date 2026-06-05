@@ -6,18 +6,14 @@
 # from anywhere: all work happens in a disposable temp clone, so none of your
 # own repos or checkouts are ever touched.
 #
-#   ./pr-backtest.sh <pr-url> [scope]
+#   ./pr-backtest.sh <pr-url> [commit]
 #
-# Scope (default: the full PR):
-#   (none)          recreate the whole PR — every commit
-#   --as-opened     only the commits that existed when the PR was opened
-#                   (drops anything pushed later during review)
-#   --at <commit>   cut off at a specific commit (up to and including it)
+# With no commit it recreates the whole PR. Pass a commit SHA from the PR to cut
+# off there instead — the backtest spans the PR's base up to and including it.
 #
 # Examples:
 #   ./pr-backtest.sh https://github.com/acme/api/pull/123
-#   ./pr-backtest.sh https://github.com/acme/api/pull/123 --as-opened
-#   ./pr-backtest.sh https://github.com/acme/api/pull/123 --at a1b2c3d
+#   ./pr-backtest.sh https://github.com/acme/api/pull/123 a1b2c3d
 #
 # Requirements:
 #   - git
@@ -26,26 +22,12 @@
 
 set -euo pipefail
 
-usage() { echo "usage: pr-backtest.sh <pr-url> [--as-opened | --at <commit>]" >&2; }
-
-url=""
-mode="full"
-at_sha=""
-while (( $# )); do
-  case "$1" in
-    --full)      mode="full" ;;
-    --as-opened) mode="as-opened" ;;
-    --at)        shift; at_sha="${1:-}"; mode="at"
-                 [[ -n "$at_sha" ]] || { echo "--at needs a commit SHA" >&2; exit 1; } ;;
-    --at=*)      at_sha="${1#--at=}"; mode="at" ;;
-    -h|--help)   usage; exit 0 ;;
-    -*)          echo "unknown option: $1" >&2; usage; exit 1 ;;
-    *)           if [[ -z "$url" ]]; then url="$1"
-                 else echo "unexpected argument: $1" >&2; usage; exit 1; fi ;;
-  esac
-  shift
-done
-[[ -n "$url" ]] || { usage; exit 1; }
+url="${1:-}"
+at_sha="${2:-}"
+if [[ -z "$url" ]]; then
+  echo "usage: pr-backtest.sh <pr-url> [commit]" >&2
+  exit 1
+fi
 
 # Parse owner / repo / number out of the PR URL.
 if [[ ! "$url" =~ github\.com/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
@@ -85,58 +67,26 @@ g fetch origin "$base_ref"
 # diff matches the original PR's no matter how the base branch has moved since.
 base_sha="$(g merge-base "$pr_head" FETCH_HEAD)"
 
-# Pick the head commit for the chosen scope. The PR's own commits, oldest-first,
-# are exactly `base_sha..pr_head`.
-scope_label="full PR"
-case "$mode" in
-  full)
-    head_sha="$pr_head"
-    ;;
+# Head: the PR tip by default, or a cutoff commit if one was given. The PR's own
+# commits, oldest-first, are exactly `base_sha..pr_head`.
+if [[ -n "$at_sha" ]]; then
+  # Resolve the cutoff against the PR's own commits (prefix match).
+  hits=()
+  while IFS= read -r c; do hits+=("$c"); done \
+    < <(g rev-list "${base_sha}..${pr_head}" | grep -i "^${at_sha}")
+  case "${#hits[@]}" in
+    0) echo "${at_sha} is not a commit in PR #${num}." >&2; exit 1 ;;
+    1) head_sha="${hits[0]}" ;;
+    *) echo "${at_sha} is ambiguous (${#hits[@]} commits); use a longer SHA." >&2; exit 1 ;;
+  esac
+  scope_label="up to $(g rev-parse --short "$head_sha")"
+else
+  head_sha="$pr_head"
+  scope_label="full PR"
+fi
 
-  at)
-    # Resolve the cutoff against the PR's own commits (prefix match, like the CLI).
-    hits=()
-    while IFS= read -r c; do hits+=("$c"); done \
-      < <(g rev-list "${base_sha}..${pr_head}" | grep -i "^${at_sha}")
-    case "${#hits[@]}" in
-      0) echo "--at ${at_sha} is not a commit in PR #${num}." >&2; exit 1 ;;
-      1) head_sha="${hits[0]}" ;;
-      *) echo "--at ${at_sha} is ambiguous (${#hits[@]} commits); use a longer SHA." >&2; exit 1 ;;
-    esac
-    scope_label="cutoff at $(g rev-parse --short "$head_sha")"
-    ;;
-
-  as-opened)
-    # The PR "as opened": every commit dated at or before the PR's open time,
-    # dropping anything pushed later. Same heuristic the CLI uses (committer date
-    # vs the PR's createdAt). gh's built-in jq turns the timestamp into epoch
-    # seconds; git reports each commit's committer date the same way (%ct).
-    t="$(gh pr view "$num" --repo "$slug" --json createdAt --jq '.createdAt | fromdateiso8601')"
-    head_sha="$pr_head"          # default: nothing was pushed after open
-    scope_label="as opened"
-    prev=""
-    while IFS= read -r c; do
-      ct="$(g show -s --format=%ct "$c")"
-      if (( ct > t )); then
-        if [[ -n "$prev" ]]; then
-          head_sha="$prev"       # last commit at or before open time
-        else
-          # Even the first commit post-dates the open: the branch was rebased /
-          # force-pushed after opening, so the as-opened set is unrecoverable.
-          head_sha="$pr_head"
-          scope_label="full PR (as-opened unavailable — branch rewritten after open)"
-          echo "Note: this PR's branch was rewritten after it was opened; the" >&2
-          echo "      'as opened' state can't be recovered — recreating the full PR." >&2
-        fi
-        break
-      fi
-      prev="$c"
-    done < <(g rev-list --reverse "${base_sha}..${pr_head}")
-    ;;
-esac
-
-# Per-scope branch names (the short head SHA keeps different scopes of the same
-# PR from colliding).
+# Per-scope branch names (the short head SHA keeps a cutoff from colliding with
+# the full-PR run of the same PR).
 short="$(g rev-parse --short=12 "$head_sha")"
 head_branch="backtest-pr${num}-${short}-head"
 base_branch="backtest-pr${num}-${short}-base"
