@@ -27,7 +27,7 @@ By default it recreates the **whole PR**. To replay it at an earlier point in ti
 
 ## When to use the CLI instead
 
-This script writes the backtest into the **PR's own repo**, using your existing GitHub login. The full [pr-backtest CLI](https://github.com/govambam/pr-backtest) adds the one thing this can't: it can land the backtest in a separate **sandbox repo** and read the source through a **scoped, read-only token**, so backtesting a repo you don't own can't write to it even by accident. Reach for it when you need that isolation — otherwise this script does the job.
+This script writes the backtest into the **PR's own repo**, using your existing GitHub login. Using [pr-backtest CLI](https://github.com/govambam/pr-backtest) you can land the backtest in a separate **sandbox repo** and read the source through a **scoped, read-only token**, so backtesting a repo you don't own can't write to it even by accident.
 
 ## License
 
