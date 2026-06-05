@@ -6,11 +6,10 @@
 # from anywhere: all work happens in a disposable temp clone, so none of your
 # own repos or checkouts are ever touched.
 #
-#   ./pr-backtest.sh <pr-url> [title]
+#   ./pr-backtest.sh <pr-url>
 #
-# Examples:
+# Example:
 #   ./pr-backtest.sh https://github.com/acme/api/pull/123
-#   ./pr-backtest.sh https://github.com/acme/api/pull/123 "[backtest] ignore — bot test"
 #
 # Requirements:
 #   - git
@@ -25,7 +24,7 @@ set -euo pipefail
 
 url="${1:-}"
 if [[ -z "$url" ]]; then
-  echo "usage: pr-backtest.sh <pr-url> [title]" >&2
+  echo "usage: pr-backtest.sh <pr-url>" >&2
   exit 1
 fi
 
@@ -46,9 +45,9 @@ read -r base_ref orig_title < <(
      --jq '[.baseRefName, .title] | @tsv'
 )
 
-# Title: second arg wins; otherwise prepend "[backtest] " so your team can see
-# at a glance that the PR is a replay and safe to ignore.
-title="${2:-[backtest] $orig_title}"
+# Prepend "[backtest] " so your team can see at a glance the PR is a replay and
+# safe to ignore.
+title="[backtest] $orig_title"
 head_branch="backtest-pr${num}-head"
 base_branch="backtest-pr${num}-base"
 
